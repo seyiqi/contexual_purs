@@ -1,4 +1,4 @@
-import os, sys, time, random, argparse
+import os, sys, time, random, argparse, pickle
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import pandas as pd
 import numpy as np
@@ -136,6 +136,46 @@ def load_purs_data():
 
 
 
+def load_jester_data():
+    # rename the dimensions
+    data = pd.read_csv('../data/jester/clean/ratings.csv').rename(columns={"user":"user_id", "item":"video_id"})
+    # TODO: it takes very long time to procss all reviews (7.2M) so we only use 10% of it
+    data = data.head(720000)
+    user_count = len(data["user_id"].unique())
+    item_count = len(data["video_id"].unique())
+    # binarize the labels
+    data["click"] = (data["rating"] > 0).astype(int)
+    # add random hour column
+    data["hour"] = np.random.randint(low=0, high=23, size=len(data))
+    data = data[['user_id', 'video_id', 'click', 'hour']]
+
+    # train test split
+    random_idx = np.random.permutation(range(len(data)))
+    validate = 4 * len(data) // 5
+    train_data = data.loc[random_idx[:validate], ]
+    # train_coverage_dict: user_id -> [item_1, item_2]
+    train_coverage_df = train_data.groupby("user_id").apply(
+        lambda x: pd.Series({"all_items": list(x["video_id"])})).reset_index()
+    train_coverage_dict = train_coverage_df.to_dict()["all_items"]
+    test_data = data.loc[random_idx[validate:], ]
+    test_coverage_df = test_data.groupby("user_id").apply(
+        lambda x: pd.Series({"all_items": list(x["video_id"])})).reset_index()
+    test_coverage_dict = test_coverage_df.to_dict()["all_items"]
+
+    # populate the history: PURS needs the history of an user
+    train_data_mat = list(train_data[['user_id', 'video_id', 'click']].values)
+    train_set = [(x[0], np.random.choice(train_coverage_dict[x[0]], 10) ,x[1], x[2]) for x in train_data_mat if x[0] in train_coverage_dict]
+    test_data_mat = list(test_data[['user_id', 'video_id', 'click']].values)
+    test_set = [(x[0], np.random.choice(test_coverage_dict[x[0]], 10), x[1], x[2]) for x in test_data_mat if x[0] in test_coverage_dict]
+
+    # post processing
+    random.shuffle(train_set)
+    random.shuffle(test_set)
+    # TODO: this is very ugly and not a reasonable thing to do!
+    train_set = train_set[:len(train_set) // batch_size * batch_size]
+    test_set = test_set[:len(test_set) // batch_size * batch_size]
+    return train_set, test_set, user_count, item_count
+
 
 if __name__ == "__main__":
 
@@ -154,9 +194,12 @@ if __name__ == "__main__":
     tf.set_random_seed(args.seed)
     batch_size = args.batch_size
 
-    # # load dataset
+    # load dataset
     if args.dataset == "purs":
         train_set, test_set, user_count, item_count = load_purs_data()
+    elif args.dataset == "jester":
+        train_set, test_set, user_count, item_count = load_jester_data()
+    print("data loaded.")
 
     gpu_options = tf.GPUOptions(allow_growth=True)
     with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
