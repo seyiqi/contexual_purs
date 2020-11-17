@@ -10,7 +10,11 @@ pip install tensorflow-gpu==1.14
 conda install cudatoolkit
 
 example command line:
+
 cd /path/to/project/code
+
 python train_purs.py --device /gpu:4 --batch-size 1000 --dataset jester
+
 device = {/cpu:0, /gpu:x}
+
 dataset = {purs, jester}
