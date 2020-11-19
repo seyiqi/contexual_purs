@@ -1,14 +1,10 @@
-import os, sys, time, random, argparse, pickle
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '4'
+import os, time, random, argparse
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import pandas as pd
 import numpy as np
 import tensorflow as tf
 from model import Model
 from sklearn.metrics import roc_auc_score
-from sklearn import preprocessing
-from lenskit.crossfold import partition_users, SampleFrac
-
-# Note: this code must be run using tensorflow 1.4.0
 
 class DataInput:
     """
@@ -42,33 +38,19 @@ class DataInput:
             y.append(t[3])
         return self.i, (u, hist, i, y)
 
+class Stats:
+    def __init__(self, cols):
+        self.stats_dict = dict([(x, []) for x in cols])
 
-def eval_model(sess, model, dataset):
-    """
-    Function that run inference for a model on a dataset
-    :param sess:
-    :param model:
-    :param dataset:
-    :return:
-    """
-    all_scores = []
-    all_labels = []
-    all_users = []
-    all_items = []
-    all_exp = []
-    for _, uij in DataInput(dataset, batch_size):
-        score, label, user, item, unexp = model.test(sess, uij)
-        all_scores.append(score)
-        all_labels.append(label)
-        all_users.append(user)
-        all_items.append(item)
-        all_exp.append(unexp)
-    all_scores = [y for x in all_scores for y in x]
-    all_labels = [y>0 for x in all_labels for y in x]
-    all_users = [y for x in all_users for y in x]
-    all_items = [y for x in all_items for y in x]
-    all_exp = [y for x in all_exp for y in x]
-    return all_scores, all_labels, all_users, all_items, all_exp
+    def update_stats(self, data_dict, epoch, phase):
+        assert len(data_dict) == (len(self.stats_dict)-2)
+        for col in data_dict:
+            self.stats_dict[col].append(data_dict[col])
+        self.stats_dict["epoch"].append(epoch)
+        self.stats_dict["phase"].append(phase)
+
+    def to_csv(self, csv_dir):
+        pd.DataFrame(self.stats_dict).to_csv(csv_dir)
 
 
 def hit_rate(preds, labels, users, topk=10):
@@ -121,29 +103,42 @@ def calculate_history(df):
     return output
 
 
-def post_process_data(batch_size, data, seed):
-    # train test split
-    res = list(partition_users(data.rename(columns={"user_id": "user"}), 1, SampleFrac(0.2), rng_spec=seed))[0]
-    train_data = res.train.rename(columns={"user": "user_id"})
-    test_data = res.test.rename(columns={"user": "user_id"})
+def post_process_data(batch_size, data):
+    tr_df, val_df, ts_df = data
 
     # populate history
-    train_history = calculate_history(train_data)
-    test_history = calculate_history(test_data)
-    train_data_mat = list(train_data[['user_id', 'video_id', 'click']].values)
-    test_data_mat = list(test_data[['user_id', 'video_id', 'click']].values)
+    train_history = calculate_history(tr_df)
+    val_history = calculate_history(val_df)
+    test_history = calculate_history(ts_df)
+    train_data_mat = list(tr_df[['user_id', 'video_id', 'click']].values)
+    val_data_mat = list(val_df[['user_id', 'video_id', 'click']].values)
+    test_data_mat = list(ts_df[['user_id', 'video_id', 'click']].values)
     train_set = [(train_data_mat[i][0], train_history[i], train_data_mat[i][1], train_data_mat[i][2]) for i in
                  range(len(train_data_mat))]
+    validation_set = [(val_data_mat[i][0], val_history[i], val_data_mat[i][1], val_data_mat[i][2]) for i in
+                 range(len(val_data_mat))]
     test_set = [(test_data_mat[i][0], test_history[i], test_data_mat[i][1], test_data_mat[i][2]) for i in
                 range(len(test_data_mat))]
 
     # post processing
-    random.shuffle(train_set)
-    random.shuffle(test_set)
     # TODO: this is very ugly and not a reasonable thing to do!
     train_set = train_set[:len(train_set) // batch_size * batch_size]
+    val_set = validation_set[:len(validation_set) // batch_size * batch_size]
     test_set = test_set[:len(test_set) // batch_size * batch_size]
-    return train_set, test_set
+    return train_set, val_set, test_set
+
+
+def load_dataset(data_dir, post_fix=""):
+    """
+    Function that loads the dataset from a directory
+    :param data_dir:
+    :param post_fix:
+    :return:
+    """
+    tr_df = pd.read_csv(os.path.join(data_dir, "train{}.csv".format(post_fix)))
+    val_df = pd.read_csv(os.path.join(data_dir, "validation{}.csv".format(post_fix)))
+    ts_df = pd.read_csv(os.path.join(data_dir, "test{}.csv".format(post_fix)))
+    return tr_df, val_df, ts_df
 
 
 def load_purs_data(batch_size, seed):
@@ -196,50 +191,98 @@ def load_purs_data(batch_size, seed):
     return train_set, test_set, user_count, item_count
 
 
-def load_jester_data(batch_size, seed):
+def load_jester_data(batch_size, postfix):
     # rename the dimensions
-    data = pd.read_csv('../data/jester/clean/ratings.csv').rename(columns={"user":"user_id", "item":"video_id"})
-    # TODO: it takes very long time to procss all reviews (7.2M) so we only use 10% of it
-    data = data.head(720000)
-    user_count = len(data["user_id"].unique())
-    item_count = len(data["video_id"].unique())
-    # binarize the labels
-    data["click"] = (data["rating"] > 0).astype(int)
+    tr_df, val_df, ts_df = load_dataset('../data/jester/clean/', postfix)
+    tr_df = tr_df.rename(columns={"user":"user_id", "item":"video_id", "binary_y":"click"})
+    val_df = val_df.rename(columns={"user":"user_id", "item":"video_id", "binary_y":"click"})
+    ts_df = ts_df.rename(columns={"user":"user_id", "item":"video_id", "binary_y":"click"})
+    all_df = pd.concat([tr_df, val_df, ts_df])
+    user_count = len(all_df["user_id"].unique())
+    item_count = len(all_df["video_id"].unique())
+
     # add random hour column
-    data["hour"] = np.random.randint(low=0, high=23, size=len(data))
-    data = data[['user_id', 'video_id', 'click', 'hour']]
+    tr_df["hour"] = np.random.randint(low=0, high=23, size=len(tr_df))
+    val_df["hour"] = np.random.randint(low=0, high=23, size=len(val_df))
+    ts_df["hour"] = np.random.randint(low=0, high=23, size=len(ts_df))
+    tr_df = tr_df[['user_id', 'video_id', 'click', 'hour']]
+    val_df = val_df[['user_id', 'video_id', 'click', 'hour']]
+    ts_df = ts_df[['user_id', 'video_id', 'click', 'hour']]
 
     # post processing and split the dataset
-    train_set, test_set = post_process_data(batch_size, data, seed)
+    tr, val, ts  = post_process_data(batch_size, [tr_df, val_df, ts_df])
+    return tr, val, ts, user_count, item_count
 
-    return train_set, test_set, user_count, item_count
 
-
-def load_beer_data(batch_size, seed):
+def load_beer_data(batch_size, postfix):
     # load and preprocess data
-    data = pd.read_csv('../data/beer/small_clean_beer_reviews.csv').rename(columns={"reviewer_id":"user_id", "beer_beerid":"video_id",
-                                                                                    "review_time":"hour"})
-    # debug!
-    #data = data.head(100000)
+    data = pd.read_csv('../data/beer/small_clean_beer_reviews.csv')
 
-    # throw out users who has less than 10 comments
-    data = data[data["num_tasted_beers"]>10]
-
-    # reindex the user and item column
-    le = preprocessing.LabelEncoder()
-    data["user_id"] = le.fit_transform(data["user_id"])
-    data["video_id"] = le.fit_transform(data["video_id"])
-    user_count = len(data["user_id"].unique())
-    item_count = len(data["video_id"].unique())
-
-    # binarize the label
-    data["click"] = (data["review_overall"] > 4).astype(int)
-    data = data[['user_id', 'video_id', 'click', 'hour']]
+    tr_df, val_df, ts_df = load_dataset('../data/beer', postfix)
+    tr_df = tr_df.rename(columns={"reviewer_id":"user_id", "beer_beerid":"video_id","review_time":"hour", "binary_y":"click"})
+    val_df = val_df.rename(columns={"reviewer_id":"user_id", "beer_beerid":"video_id","review_time":"hour", "binary_y":"click"})
+    ts_df = ts_df.rename(columns={"reviewer_id":"user_id", "beer_beerid":"video_id","review_time":"hour", "binary_y":"click"})
+    all_df = pd.concat([tr_df, val_df, ts_df])
+    user_count = len(all_df["user_id"].unique())
+    item_count = len(all_df["video_id"].unique())
+    tr_df = tr_df[['user_id', 'video_id', 'click', 'hour']]
+    val_df = val_df[['user_id', 'video_id', 'click', 'hour']]
+    ts_df = ts_df[['user_id', 'video_id', 'click', 'hour']]
 
     # post processing and split the dataset
-    train_set, test_set = post_process_data(batch_size, data, seed)
+    tr, val, ts = post_process_data(batch_size, [tr_df, val_df, ts_df])
+    return tr, val, ts, user_count, item_count
 
-    return train_set, test_set, user_count, item_count
+
+def eval_model(sess, model, dataset):
+    """
+    Function that run inference for a model on a dataset
+    :param sess:
+    :param model:
+    :param dataset:
+    :return:
+    """
+    all_scores = []
+    all_labels = []
+    all_users = []
+    all_items = []
+    all_exp = []
+    for _, uij in DataInput(dataset, batch_size):
+        score, label, user, item, unexp = model.test(sess, uij)
+        all_scores.append(score)
+        all_labels.append(label)
+        all_users.append(user)
+        all_items.append(item)
+        all_exp.append(unexp)
+    all_scores = [y for x in all_scores for y in x]
+    all_labels = [y>0 for x in all_labels for y in x]
+    all_users = [y for x in all_users for y in x]
+    all_items = [y for x in all_items for y in x]
+    all_exp = [y for x in all_exp for y in x]
+    return all_scores, all_labels, all_users, all_items, all_exp
+
+
+def report_model(preds, labels, usrs, items, exps, item_count):
+    """
+    Give a full report including multiple metrics for a set of predictions
+    :param labels:
+    :param preds:
+    :param usrs:
+    :param items:
+    :param exps:
+    :param item_count:
+    :return:
+    """
+    # auc
+    auc_score = roc_auc_score(labels, preds)
+    # hit
+    hit = hit_rate(preds, labels, usrs)
+    # coverage
+    cov = coverage(preds, items, item_count)
+    # unexpectedness
+    unexp = np.nanmean(exps)
+    return {"auc":auc_score, "hit":hit, "cov":cov, "unexp":unexp}
+
 
 if __name__ == "__main__":
 
@@ -249,7 +292,9 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--num-epoch", type=int, default=100)
     parser.add_argument("--device", type=str, default="/cpu:0")
-    parser.add_argument("--dataset", type=str, default="purs")
+    parser.add_argument("--dataset", type=str, default="jester_small")
+    parser.add_argument("--learning-rate", type=float, default=1.0)
+    parser.add_argument("--stats-path", type=str, default=None)
     args = parser.parse_args()
 
     # experiment set up
@@ -259,28 +304,33 @@ if __name__ == "__main__":
     batch_size = args.batch_size
 
     # load dataset
-    if args.dataset == "purs":
-        train_set, test_set, user_count, item_count = load_purs_data(batch_size, args.seed)
-    elif args.dataset == "jester":
-        train_set, test_set, user_count, item_count = load_jester_data(batch_size, args.seed)
+    if args.dataset == "jester":
+        train_set, val_set, test_set, user_count, item_count = load_jester_data(batch_size, "")
+    elif args.dataset == "jester_small":
+        train_set, val_set, test_set, user_count, item_count = load_jester_data(batch_size, "_small")
     elif args.dataset == "beer":
-        train_set, test_set, user_count, item_count = load_beer_data(batch_size, args.seed)
+        train_set, val_set, test_set, user_count, item_count = load_beer_data(batch_size, "")
+    elif args.dataset == "beer_small":
+        train_set, val_set, test_set, user_count, item_count = load_beer_data(batch_size, "_small")
+    elif args.dataset == "beer_ultrasmall":
+        train_set, val_set, test_set, user_count, item_count = load_beer_data(batch_size, "_ultrasmall")
     else:
         raise ValueError("Invalid dataset option {}".format(args.dataset))
     print("data loaded.")
 
     # start experiment
+    stats_holder = Stats(["auc", "hit", "cov", "unexp", "epoch", "phase"])
     gpu_options = tf.GPUOptions(allow_growth=True)
     with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
         # model set up
         model = Model(user_count, item_count, batch_size)
         sess.run(tf.global_variables_initializer())
         sess.run(tf.local_variables_initializer())
-        lr = 1
+        lr = args.learning_rate
         last_auc = 0.0
 
         # epoch loop
-        for _ in range(1000):
+        for epoch_num in range(1, 1000):
             # training
             start_time = time.time()
             random.shuffle(train_set)
@@ -292,23 +342,29 @@ if __name__ == "__main__":
 
             # evaluation
             model.global_epoch_step_op.eval()
-            ts_preds, ts_labels, ts_usrs, ts_items, ts_exps = eval_model(sess, model, test_set)
             tr_preds, tr_labels, tr_usrs, tr_items, tr_exps = eval_model(sess, model, train_set)
-            test_auc = roc_auc_score(ts_labels, ts_preds)
-            train_auc = roc_auc_score(tr_labels, tr_preds)
-            hit = hit_rate(ts_preds, ts_labels, ts_usrs)
-            cov = coverage(ts_preds, ts_items, item_count)
-            unexp = np.nanmean(ts_exps)
+            val_preds, val_labels, val_usrs, val_items, val_exps = eval_model(sess, model, val_set)
+            ts_preds, ts_labels, ts_usrs, ts_items, ts_exps = eval_model(sess, model, test_set)
+            # calculate stats
+            tr_stats = report_model(tr_preds, tr_labels, tr_usrs, tr_items, tr_exps, item_count)
+            val_stats = report_model(val_preds, val_labels, val_usrs, val_items, val_exps, item_count)
+            ts_stats = report_model(ts_preds, ts_labels, ts_usrs, ts_items, ts_exps, item_count)
+            # report stats
             print('Epoch %d DONE\tCost time: %.2f' %
                   (model.global_epoch_step.eval(), time.time() - start_time))
             print('Epoch %d loss: %.4f' % (model.global_epoch_step.eval(), loss_sum))
-            print('Epoch %d training auc: %.4f' % (model.global_epoch_step.eval(), train_auc))
-            print('Epoch %d test auc: %.4f' % (model.global_epoch_step.eval(), test_auc))
-            print('Epoch %d Eval_Hit_Rate: %.4f' % (model.global_epoch_step.eval(), hit))
-            print('Epoch %d Eval_Coverage: %.4f' % (model.global_epoch_step.eval(), cov))
-            print('Epoch %d Eval_Unexpectedness: %.4f' % (model.global_epoch_step.eval(), unexp))
+            print('Epoch %d training stats: {}'.format(tr_stats))
+            print('Epoch %d validation stats: {}'.format(val_stats))
+            print('Epoch %d test stats: {}'.format(ts_stats))
+            # update stats
+            stats_holder.update_stats(tr_stats, epoch_num, "training")
+            stats_holder.update_stats(val_stats, epoch_num, "validation")
+            stats_holder.update_stats(ts_stats, epoch_num, "test")
+            if args.stats_path is not None:
+                stats_holder.to_csv(args.stats_path)
 
             # adjust learning rate
+            train_auc = tr_stats["auc"]
             if abs(train_auc - last_auc) < 0.001:
                 lr /= 2
             last_auc = train_auc
