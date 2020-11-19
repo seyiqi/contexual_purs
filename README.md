@@ -17,4 +17,4 @@ python train_purs.py --device /gpu:4 --batch-size 1000 --dataset jester
 
 device = {/cpu:0, /gpu:x}
 
-dataset = {purs, jester}
+dataset = {beer, beer_small, beer_ultrasmall, jester, jester_small}
