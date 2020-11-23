@@ -298,7 +298,7 @@ def load_beer_data(batch_size, postfix, with_meta_data=False, embeddingsize=100)
     return tr, val, ts, user_count, item_count, metafeature_dict
 
 
-def eval_model(sess, model, dataset):
+def eval_model(sess, model, dataset, metafeature_dict):
     """
     Function that run inference for a model on a dataset
     :param sess:
@@ -311,7 +311,12 @@ def eval_model(sess, model, dataset):
     all_users = []
     all_items = []
     all_exp = []
-    for _, uij in DataInput(dataset, batch_size):
+
+    dataloder = DataInput(dataset, batch_size) 
+    if len(metafeature_dict) > 0:
+        dataloder.metafeature_dict = metafeature_dict
+
+    for _, uij in dataloder:
         score, label, user, item, unexp = model.test(sess, uij)
         all_scores.append(score)
         all_labels.append(label)
@@ -424,9 +429,9 @@ if __name__ == "__main__":
 
             # evaluation
             model.global_epoch_step_op.eval()
-            tr_preds, tr_labels, tr_usrs, tr_items, tr_exps = eval_model(sess, model, train_set)
-            val_preds, val_labels, val_usrs, val_items, val_exps = eval_model(sess, model, val_set)
-            ts_preds, ts_labels, ts_usrs, ts_items, ts_exps = eval_model(sess, model, test_set)
+            tr_preds, tr_labels, tr_usrs, tr_items, tr_exps = eval_model(sess, model, train_set, metafeature_dict)
+            val_preds, val_labels, val_usrs, val_items, val_exps = eval_model(sess, model, val_set, metafeature_dict)
+            ts_preds, ts_labels, ts_usrs, ts_items, ts_exps = eval_model(sess, model, test_set, metafeature_dict)
             # calculate stats
             tr_stats = report_model(tr_preds, tr_labels, tr_usrs, tr_items, tr_exps, item_count)
             val_stats = report_model(val_preds, val_labels, val_usrs, val_items, val_exps, item_count)
