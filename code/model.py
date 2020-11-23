@@ -3,7 +3,7 @@ from tensorflow.contrib.rnn import GRUCell
 from tensorflow.python.ops.rnn import bidirectional_dynamic_rnn as bi_rnn
 
 class Model(object):
-    def __init__(self, user_count, item_count, batch_size, device="/cpu:0"):
+    def __init__(self, user_count, item_count, batch_size, metafeaturesize=0, datatype='beer', device="/cpu:0"):
         hidden_size = 128
         long_memory_window = 10
         short_memory_window = 3
@@ -14,6 +14,8 @@ class Model(object):
             self.y = tf.placeholder(tf.float32, [batch_size, ])  # [B]
             self.hist = tf.placeholder(tf.int32, [batch_size, long_memory_window])  # [B, T]
             self.lr = tf.placeholder(tf.float64, [])
+            if metafeaturesize>0:
+                self.meta = tf.placeholder(tf.float32, [batch_size, metafeaturesize])
 
             user_emb_w = tf.get_variable("user_emb_w", [user_count, hidden_size // 2])
             item_emb_w = tf.get_variable("item_emb_w", [item_count, hidden_size // 2])
@@ -50,7 +52,15 @@ class Model(object):
             # short_preference = tf.nn.dropout(short_preference, 0.1)
 
             # Combine Long-Short-Term-User-Preferences
-            concat = tf.concat([long_preference, item_emb], axis=1)
+            if metafeaturesize>0:
+                if 'beer' in datatype:
+                    meta_emb = tf.layers.dense(self.meta, 60, activation=tf.nn.sigmoid, name='metaf1')
+                    meta_emb = tf.nn.dropout(meta_emb, 0.5)
+                    meta_emb = tf.layers.dense(meta_emb, 30, activation=tf.nn.sigmoid, name='metaf2')
+                    
+                concat = tf.concat([long_preference, item_emb, meta_emb], axis=1)
+            else:
+                concat = tf.concat([long_preference, item_emb], axis=1)
             concat = tf.layers.batch_normalization(inputs=concat)
             concat = tf.layers.dense(concat, 80, activation=tf.nn.sigmoid, name='f1')
             concat = tf.layers.dense(concat, 40, activation=tf.nn.sigmoid, name='f2')
@@ -105,6 +115,7 @@ class Model(object):
             self.hist: uij[1],
             self.i: uij[2],
             self.y: uij[3],
+            self.meta: uij[4],
             self.lr: lr,
         })
         return loss
@@ -115,6 +126,7 @@ class Model(object):
             self.hist: uij[1],
             self.i: uij[2],
             self.y: uij[3],
+            self.meta: uij[4],
         })
         return score, uij[3], uij[0], uij[2], unexp
 
@@ -197,7 +209,7 @@ class Model(object):
             Y = tf.reduce_sum(tf.pow((C - X1) / window_radius, 2), axis=2)
             gY = tf.exp(-Y)
             num = tf.reduce_sum(tf.expand_dims(gY, 3) * X2, axis=2)
-            denom = tf.reduce_sum(gY, axis=2, keep_dims=True)
+            denom = tf.reduce_sum(gY, axis=2, keepdims=True)
             C = num / denom
             return C
 
