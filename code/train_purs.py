@@ -437,7 +437,7 @@ if __name__ == "__main__":
             val_stats = report_model(val_preds, val_labels, val_usrs, val_items, val_exps, item_count)
             ts_stats = report_model(ts_preds, ts_labels, ts_usrs, ts_items, ts_exps, item_count)
             # report stats
-            print('Epoch %d DONE\tCost time: %.2f' %
+            print('\nEpoch %d DONE\tCost time: %.2f' %
                   (model.global_epoch_step.eval(), time.time() - start_time))
             print('Epoch %d loss: %.4f' % (model.global_epoch_step.eval(), loss_sum))
             print('Epoch %d'%model.global_epoch_step.eval(), 'training stats: {}'.format(tr_stats))
