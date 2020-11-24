@@ -209,7 +209,7 @@ class Model(object):
             Y = tf.reduce_sum(tf.pow((C - X1) / window_radius, 2), axis=2)
             gY = tf.exp(-Y)
             num = tf.reduce_sum(tf.expand_dims(gY, 3) * X2, axis=2)
-            denom = tf.reduce_sum(gY, axis=2, keepdims=True)
+            denom = tf.reduce_sum(gY, axis=2, keep_dims=True)
             C = num / denom
             return C
 

@@ -198,7 +198,7 @@ def load_purs_data(batch_size, seed):
 
 def load_jester_data(batch_size, postfix):
     # rename the dimensions
-    tr_df, val_df, ts_df = load_dataset('../data/jester/clean/', postfix)
+    tr_df, val_df, ts_df = load_dataset('data/jester/clean/', postfix)
     tr_df = tr_df.rename(columns={"user":"user_id", "item":"video_id", "binary_y":"click"})
     val_df = val_df.rename(columns={"user":"user_id", "item":"video_id", "binary_y":"click"})
     ts_df = ts_df.rename(columns={"user":"user_id", "item":"video_id", "binary_y":"click"})
@@ -273,7 +273,7 @@ def load_beer_data(batch_size, postfix, with_meta_data=False, embeddingsize=100)
     # load and preprocess data
     # data = pd.read_csv('../data/beer/small_clean_beer_reviews.csv')
 
-    tr_df, val_df, ts_df = load_dataset('../data/beer', postfix)
+    tr_df, val_df, ts_df = load_dataset('data/beer', postfix)
     all_df_withmeta = pd.concat([tr_df, val_df, ts_df])
     #print(all_df_withmeta.columns)
 
@@ -298,7 +298,7 @@ def load_beer_data(batch_size, postfix, with_meta_data=False, embeddingsize=100)
     return tr, val, ts, user_count, item_count, metafeature_dict
 
 
-def eval_model(sess, model, dataset, metafeature_dict):
+def eval_model(sess, model, dataset, metafeature_dict, phase):
     """
     Function that run inference for a model on a dataset
     :param sess:
@@ -312,17 +312,27 @@ def eval_model(sess, model, dataset, metafeature_dict):
     all_items = []
     all_exp = []
 
+
+    epoch_size = round(len(dataset) / batch_size)
     dataloder = DataInput(dataset, batch_size) 
     if len(metafeature_dict) > 0:
         dataloder.metafeature_dict = metafeature_dict
 
-    for _, uij in dataloder:
+    start_time = time.time()
+
+    for batch, uij in dataloder:
         score, label, user, item, unexp = model.test(sess, uij)
         all_scores.append(score)
         all_labels.append(label)
         all_users.append(user)
         all_items.append(item)
         all_exp.append(unexp)
+
+        timenow = time.time() - start_time
+        sys.stdout.write("\r\t Eval: %s %.2fs/step Step %d/%d" %
+                             (phase, timenow/batch, batch, epoch_size))
+        sys.stdout.flush()
+
     all_scores = [y for x in all_scores for y in x]
     all_labels = [y>0 for x in all_labels for y in x]
     all_users = [y for x in all_users for y in x]
@@ -363,9 +373,12 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="/cpu:0")
     parser.add_argument("--dataset", type=str, default="jester_small")
     parser.add_argument("--learning-rate", type=float, default=1.0)
-    parser.add_argument("--stats-path", type=str, default=None)
+    parser.add_argument("--save-path", type=str, default=None)
+    #parser.add_argument("--model-path", type=str, default=None)
     parser.add_argument("--with-meta-data", action='store_true')
     parser.add_argument("--embeddingsize", type=int, default=50)
+    parser.add_argument("--reload", action='store_true')
+
     args = parser.parse_args()
 
     # experiment set up
@@ -394,6 +407,9 @@ if __name__ == "__main__":
         raise ValueError("Invalid dataset option {}".format(args.dataset))
     print("data loaded.")
 
+    if ~os.path.exists(args.save_path):
+        os.mkdir(args.save_path)
+
     # start experiment
     stats_holder = Stats(["auc", "hit", "cov", "unexp", "epoch", "phase"])
     gpu_options = tf.GPUOptions(allow_growth=True)
@@ -403,10 +419,15 @@ if __name__ == "__main__":
         model = Model(user_count, item_count, batch_size, 
             metafeaturesize= len(list(metafeature_dict.items())[0][1]) if len(metafeature_dict) > 0 else 0,
             datatype=args.dataset)
+        if args.reload and (args.stats_path is not None):
+            model.restore(sess, path=os.path.join(args.save_path, '.model'))
+            print("model loaded.")
+
         sess.run(tf.global_variables_initializer())
         sess.run(tf.local_variables_initializer())
         lr = args.learning_rate
         last_auc = 0.0
+        highest_auc = 0.0
 
         # epoch loop
         for epoch_num in range(1, 1000):
@@ -429,9 +450,9 @@ if __name__ == "__main__":
 
             # evaluation
             model.global_epoch_step_op.eval()
-            tr_preds, tr_labels, tr_usrs, tr_items, tr_exps = eval_model(sess, model, train_set, metafeature_dict)
-            val_preds, val_labels, val_usrs, val_items, val_exps = eval_model(sess, model, val_set, metafeature_dict)
-            ts_preds, ts_labels, ts_usrs, ts_items, ts_exps = eval_model(sess, model, test_set, metafeature_dict)
+            tr_preds, tr_labels, tr_usrs, tr_items, tr_exps = eval_model(sess, model, train_set, metafeature_dict, 'training')
+            val_preds, val_labels, val_usrs, val_items, val_exps = eval_model(sess, model, val_set, metafeature_dict, 'validation')
+            ts_preds, ts_labels, ts_usrs, ts_items, ts_exps = eval_model(sess, model, test_set, metafeature_dict, 'test')
             # calculate stats
             tr_stats = report_model(tr_preds, tr_labels, tr_usrs, tr_items, tr_exps, item_count)
             val_stats = report_model(val_preds, val_labels, val_usrs, val_items, val_exps, item_count)
@@ -448,10 +469,15 @@ if __name__ == "__main__":
             stats_holder.update_stats(val_stats, epoch_num, "validation")
             stats_holder.update_stats(ts_stats, epoch_num, "test")
             if args.stats_path is not None:
-                stats_holder.to_csv(args.stats_path)
+                stats_holder.to_csv(os.path.join(args.save_path, '.csv'))
 
             # adjust learning rate
             train_auc = tr_stats["auc"]
             if abs(train_auc - last_auc) < 0.001:
                 lr /= 2
             last_auc = train_auc
+
+            if val_stats['auc']> highest_auc:
+                model.save(sess=sess, path=os.path.join(args.save_path, '.model'))
+                highest_auc = val_stats['auc']
+
