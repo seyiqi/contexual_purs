@@ -407,19 +407,21 @@ if __name__ == "__main__":
         raise ValueError("Invalid dataset option {}".format(args.dataset))
     print("data loaded.")
 
-    if ~os.path.exists(args.save_path):
+    if not os.path.exists(args.save_path):
         os.mkdir(args.save_path)
 
     # start experiment
     stats_holder = Stats(["auc", "hit", "cov", "unexp", "epoch", "phase"])
     gpu_options = tf.GPUOptions(allow_growth=True)
+    config=tf.ConfigProto(allow_soft_placement=True,  log_device_placement=True, gpu_options=gpu_options )
 
-    with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+    with tf.Session(config=config) as sess:
         # model set up
         model = Model(user_count, item_count, batch_size, 
             metafeaturesize= len(list(metafeature_dict.items())[0][1]) if len(metafeature_dict) > 0 else 0,
-            datatype=args.dataset)
-        if args.reload and (args.stats_path is not None):
+            datatype=args.dataset,
+            device=args.device)
+        if args.reload and (args.save_path is not None):
             model.restore(sess, path=os.path.join(args.save_path, '.model'))
             print("model loaded.")
 
@@ -468,8 +470,8 @@ if __name__ == "__main__":
             stats_holder.update_stats(tr_stats, epoch_num, "training")
             stats_holder.update_stats(val_stats, epoch_num, "validation")
             stats_holder.update_stats(ts_stats, epoch_num, "test")
-            if args.stats_path is not None:
-                stats_holder.to_csv(os.path.join(args.save_path, '.csv'))
+            
+            stats_holder.to_csv(os.path.join(args.save_path, 'history.csv'))
 
             # adjust learning rate
             train_auc = tr_stats["auc"]
@@ -478,6 +480,6 @@ if __name__ == "__main__":
             last_auc = train_auc
 
             if val_stats['auc']> highest_auc:
-                model.save(sess=sess, path=os.path.join(args.save_path, '.model'))
+                model.save(sess=sess, path=os.path.join(args.save_path, 'best_val.model'))
                 highest_auc = val_stats['auc']
 

@@ -7,6 +7,7 @@ class Model(object):
         hidden_size = 128
         long_memory_window = 10
         short_memory_window = 3
+        self.device = device
 
         with tf.device(device):
             self.u = tf.placeholder(tf.int32, [batch_size, ])  # [B]
@@ -163,16 +164,17 @@ class Model(object):
                 `[batch_size, cell.output_size]`.
         """
         # Trainable parameters
-        w_omega = tf.Variable(tf.random_normal([hidden_size, attention_size], stddev=0.1))
-        b_omega = tf.Variable(tf.random_normal([attention_size], stddev=0.1))
-        u_omega = tf.Variable(tf.random_normal([attention_size], stddev=0.1))
-        v = tf.tanh(tf.tensordot(inputs, w_omega, axes=1) + b_omega)
-        vu = tf.tensordot(v, u_omega, axes=1, name='vu')  # (B,T) shape
-        alphas = tf.nn.softmax(vu, name='alphas')  # (B,T) shape
-        # Output of (Bi-)RNN is reduced with attention vector; the result has (B,D) shape
-        output = tf.reduce_sum(inputs * tf.tile(tf.expand_dims(alphas, -1), [1, 1, hidden_size]), 1,
-                               name="attention_embedding")
-        return output, alphas
+        with tf.device(self.device):
+            w_omega = tf.Variable(tf.random_normal([hidden_size, attention_size], stddev=0.1))
+            b_omega = tf.Variable(tf.random_normal([attention_size], stddev=0.1))
+            u_omega = tf.Variable(tf.random_normal([attention_size], stddev=0.1))
+            v = tf.tanh(tf.tensordot(inputs, w_omega, axes=1) + b_omega)
+            vu = tf.tensordot(v, u_omega, axes=1, name='vu')  # (B,T) shape
+            alphas = tf.nn.softmax(vu, name='alphas')  # (B,T) shape
+            # Output of (Bi-)RNN is reduced with attention vector; the result has (B,D) shape
+            output = tf.reduce_sum(inputs * tf.tile(tf.expand_dims(alphas, -1), [1, 1, hidden_size]), 1,
+                                   name="attention_embedding")
+            return output, alphas
 
     def unexp_attention(self, querys, keys, keys_id):
         """
@@ -181,23 +183,25 @@ class Model(object):
         keys:        [Batchsize, max_seq_len, embedding_size]  max_seq_len is the number of keys(e.g. number of clicked creativeid for each sample)
         keys_id:     [Batchsize, max_seq_len]
         """
-        querys = tf.expand_dims(querys, 1)
-        keys_length = tf.shape(keys)[1]  # padded_dim
-        embedding_size = querys.get_shape().as_list()[-1]
-        keys = tf.reshape(keys, shape=[-1, keys_length, embedding_size])
-        querys = tf.reshape(tf.tile(querys, [1, keys_length, 1]), shape=[-1, keys_length, embedding_size])
+        with tf.device(self.device):
 
-        net = tf.concat([keys, keys - querys, querys, keys * querys], axis=-1)
-        for units in [32, 16]:
-            net = tf.layers.dense(net, units=units, activation=tf.nn.relu)
-        att_wgt = tf.layers.dense(net, units=1, activation=tf.sigmoid)  # shape(batch_size, max_seq_len, 1)
-        outputs = tf.reshape(att_wgt, shape=[-1, 1, keys_length], name="weight")  # shape(batch_size, 1, max_seq_len)
-        scores = outputs
-        scores = scores / (embedding_size ** 0.5)  # scale
-        scores = tf.nn.softmax(scores)
-        outputs = tf.matmul(scores, keys)  # (batch_size, 1, embedding_size)
-        outputs = tf.reduce_sum(outputs, 1, name="unexp_embedding")  # (batch_size, embedding_size)
-        return outputs
+            querys = tf.expand_dims(querys, 1)
+            keys_length = tf.shape(keys)[1]  # padded_dim
+            embedding_size = querys.get_shape().as_list()[-1]
+            keys = tf.reshape(keys, shape=[-1, keys_length, embedding_size])
+            querys = tf.reshape(tf.tile(querys, [1, keys_length, 1]), shape=[-1, keys_length, embedding_size])
+
+            net = tf.concat([keys, keys - querys, querys, keys * querys], axis=-1)
+            for units in [32, 16]:
+                net = tf.layers.dense(net, units=units, activation=tf.nn.relu)
+            att_wgt = tf.layers.dense(net, units=1, activation=tf.sigmoid)  # shape(batch_size, max_seq_len, 1)
+            outputs = tf.reshape(att_wgt, shape=[-1, 1, keys_length], name="weight")  # shape(batch_size, 1, max_seq_len)
+            scores = outputs
+            scores = scores / (embedding_size ** 0.5)  # scale
+            scores = tf.nn.softmax(scores)
+            outputs = tf.matmul(scores, keys)  # (batch_size, 1, embedding_size)
+            outputs = tf.reduce_sum(outputs, 1, name="unexp_embedding")  # (batch_size, embedding_size)
+            return outputs
 
     def mean_shift(self, input_X, window_radius=0.2):
         X1 = tf.expand_dims(tf.transpose(input_X, perm=[0, 2, 1]), 1)
