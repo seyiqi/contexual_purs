@@ -8,6 +8,7 @@ class Model(object):
         long_memory_window = 10
         short_memory_window = 3
         self.device = device
+        self.metafeaturesize = metafeaturesize
 
         with tf.device(device):
             self.u = tf.placeholder(tf.int32, [batch_size, ])  # [B]
@@ -111,24 +112,43 @@ class Model(object):
             self.train_op = self.opt.apply_gradients(zip(clip_gradients, trainable_params), global_step=self.global_step)
 
     def train(self, sess, uij, lr):
-        loss, _ = sess.run([self.loss, self.train_op], feed_dict={
-            self.u: uij[0],
-            self.hist: uij[1],
-            self.i: uij[2],
-            self.y: uij[3],
-            self.meta: uij[4],
-            self.lr: lr,
-        })
+        if self.metafeaturesize>0:
+
+            loss, _ = sess.run([self.loss, self.train_op], feed_dict={
+                self.u: uij[0],
+                self.hist: uij[1],
+                self.i: uij[2],
+                self.y: uij[3],
+                self.meta: uij[4],
+                self.lr: lr,
+            })
+        else:
+            loss, _ = sess.run([self.loss, self.train_op], feed_dict={
+                self.u: uij[0],
+                self.hist: uij[1],
+                self.i: uij[2],
+                self.y: uij[3],
+                self.lr: lr,
+            })
         return loss
 
     def test(self, sess, uij):
-        score, unexp = sess.run([self.score, self.unexp], feed_dict={
-            self.u: uij[0],
-            self.hist: uij[1],
-            self.i: uij[2],
-            self.y: uij[3],
-            self.meta: uij[4],
-        })
+        if self.metafeaturesize>0:
+            score, unexp = sess.run([self.score, self.unexp], feed_dict={
+                self.u: uij[0],
+                self.hist: uij[1],
+                self.i: uij[2],
+                self.y: uij[3],
+                self.meta: uij[4],
+            })
+        else:
+            score, unexp = sess.run([self.score, self.unexp], feed_dict={
+                self.u: uij[0],
+                self.hist: uij[1],
+                self.i: uij[2],
+                self.y: uij[3],
+            })
+
         return score, uij[3], uij[0], uij[2], unexp
 
     def save(self, sess, path):

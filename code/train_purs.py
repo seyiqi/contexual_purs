@@ -418,7 +418,7 @@ if __name__ == "__main__":
     with tf.Session(config=config) as sess:
         # model set up
         model = Model(user_count, item_count, batch_size, 
-            metafeaturesize= len(list(metafeature_dict.items())[0][1]) if len(metafeature_dict) > 0 else 0,
+            metafeaturesize= len(list(metafeature_dict.items())[0][1]) if args.with_meta_data > 0 else 0,
             datatype=args.dataset,
             device=args.device)
         if args.reload and (args.save_path is not None):
