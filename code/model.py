@@ -66,6 +66,9 @@ class Model(object):
             concat = tf.layers.batch_normalization(inputs=concat)
             concat = tf.layers.dense(concat, 80, activation=tf.nn.sigmoid, name='f1')
             concat = tf.layers.dense(concat, 40, activation=tf.nn.sigmoid, name='f2')
+
+            self.representation_to_save = concat#.copy()
+
             concat = tf.layers.dense(concat, 1, activation=None, name='f3')
             concat = tf.reshape(concat, [-1])
 
@@ -150,6 +153,25 @@ class Model(object):
             })
 
         return score, uij[3], uij[0], uij[2], unexp
+
+    def eval_saving_representations(self, sess, uij):
+        if self.metafeaturesize>0:
+            score, unexp, representations = sess.run([self.score, self.unexp, self.representation_to_save], feed_dict={
+                self.u: uij[0],
+                self.hist: uij[1],
+                self.i: uij[2],
+                self.y: uij[3],
+                self.meta: uij[4],
+            })
+        else:
+            score, unexp, representations = sess.run([self.score, self.unexp, self.representation_to_save], feed_dict={
+                self.u: uij[0],
+                self.hist: uij[1],
+                self.i: uij[2],
+                self.y: uij[3],
+            })
+
+        return score, uij[3], uij[0], uij[2], unexp, representations
 
     def save(self, sess, path):
         saver = tf.train.Saver()
