@@ -3,10 +3,12 @@ from tensorflow.contrib.rnn import GRUCell
 from tensorflow.python.ops.rnn import bidirectional_dynamic_rnn as bi_rnn
 
 class Model(object):
-    def __init__(self, user_count, item_count, batch_size, device="/cpu:0"):
+    def __init__(self, user_count, item_count, batch_size, metafeaturesize=0, datatype='beer', device="/cpu:0"):
         hidden_size = 128
         long_memory_window = 10
         short_memory_window = 3
+        self.device = device
+        self.metafeaturesize = metafeaturesize
 
         with tf.device(device):
             self.u = tf.placeholder(tf.int32, [batch_size, ])  # [B]
@@ -14,6 +16,8 @@ class Model(object):
             self.y = tf.placeholder(tf.float32, [batch_size, ])  # [B]
             self.hist = tf.placeholder(tf.int32, [batch_size, long_memory_window])  # [B, T]
             self.lr = tf.placeholder(tf.float64, [])
+            if metafeaturesize>0:
+                self.meta = tf.placeholder(tf.float32, [batch_size, metafeaturesize])
 
             user_emb_w = tf.get_variable("user_emb_w", [user_count, hidden_size // 2])
             item_emb_w = tf.get_variable("item_emb_w", [item_count, hidden_size // 2])
@@ -50,7 +54,15 @@ class Model(object):
             # short_preference = tf.nn.dropout(short_preference, 0.1)
 
             # Combine Long-Short-Term-User-Preferences
-            concat = tf.concat([long_preference, item_emb], axis=1)
+            if metafeaturesize>0:
+                if 'beer' or 'jester' in datatype:
+                    meta_emb = tf.layers.dense(self.meta, 60, activation=tf.nn.sigmoid, name='metaf1')
+                    meta_emb = tf.nn.dropout(meta_emb, 0.5)
+                    meta_emb = tf.layers.dense(meta_emb, 30, activation=tf.nn.sigmoid, name='metaf2')
+                    
+                concat = tf.concat([long_preference, item_emb, meta_emb], axis=1)
+            else:
+                concat = tf.concat([long_preference, item_emb], axis=1)
             concat = tf.layers.batch_normalization(inputs=concat)
             concat = tf.layers.dense(concat, 80, activation=tf.nn.sigmoid, name='f1')
             concat = tf.layers.dense(concat, 40, activation=tf.nn.sigmoid, name='f2')
@@ -100,22 +112,43 @@ class Model(object):
             self.train_op = self.opt.apply_gradients(zip(clip_gradients, trainable_params), global_step=self.global_step)
 
     def train(self, sess, uij, lr):
-        loss, _ = sess.run([self.loss, self.train_op], feed_dict={
-            self.u: uij[0],
-            self.hist: uij[1],
-            self.i: uij[2],
-            self.y: uij[3],
-            self.lr: lr,
-        })
+        if self.>0:
+
+            loss, _ = sess.run([self.loss, self.train_op], feed_dict={
+                self.u: uij[0],
+                self.hist: uij[1],
+                self.i: uij[2],
+                self.y: uij[3],
+                self.meta: uij[4],
+                self.lr: lr,
+            })
+        else:
+            loss, _ = sess.run([self.loss, self.train_op], feed_dict={
+                self.u: uij[0],
+                self.hist: uij[1],
+                self.i: uij[2],
+                self.y: uij[3],
+                self.lr: lr,
+            })
         return loss
 
     def test(self, sess, uij):
-        score, unexp = sess.run([self.score, self.unexp], feed_dict={
-            self.u: uij[0],
-            self.hist: uij[1],
-            self.i: uij[2],
-            self.y: uij[3],
-        })
+        if self.metafeaturesize>0:
+            score, unexp = sess.run([self.score, self.unexp], feed_dict={
+                self.u: uij[0],
+                self.hist: uij[1],
+                self.i: uij[2],
+                self.y: uij[3],
+                self.meta: uij[4],
+            })
+        else:
+            score, unexp = sess.run([self.score, self.unexp], feed_dict={
+                self.u: uij[0],
+                self.hist: uij[1],
+                self.i: uij[2],
+                self.y: uij[3],
+            })
+
         return score, uij[3], uij[0], uij[2], unexp
 
     def save(self, sess, path):
@@ -138,7 +171,6 @@ class Model(object):
         The idea was proposed in the article by Z. Yang et al., "Hierarchical Attention Networks
         for Document Classification", 2016: http://www.aclweb.org/anthology/N16-1174.
         Variables notation is also inherited from the article
-
         Args:
             inputs: The Attention inputs.
                 Matches outputs of RNN/Bi-RNN layer (not final state):
@@ -151,16 +183,17 @@ class Model(object):
                 `[batch_size, cell.output_size]`.
         """
         # Trainable parameters
-        w_omega = tf.Variable(tf.random_normal([hidden_size, attention_size], stddev=0.1))
-        b_omega = tf.Variable(tf.random_normal([attention_size], stddev=0.1))
-        u_omega = tf.Variable(tf.random_normal([attention_size], stddev=0.1))
-        v = tf.tanh(tf.tensordot(inputs, w_omega, axes=1) + b_omega)
-        vu = tf.tensordot(v, u_omega, axes=1, name='vu')  # (B,T) shape
-        alphas = tf.nn.softmax(vu, name='alphas')  # (B,T) shape
-        # Output of (Bi-)RNN is reduced with attention vector; the result has (B,D) shape
-        output = tf.reduce_sum(inputs * tf.tile(tf.expand_dims(alphas, -1), [1, 1, hidden_size]), 1,
-                               name="attention_embedding")
-        return output, alphas
+        with tf.device(self.device):
+            w_omega = tf.Variable(tf.random_normal([hidden_size, attention_size], stddev=0.1))
+            b_omega = tf.Variable(tf.random_normal([attention_size], stddev=0.1))
+            u_omega = tf.Variable(tf.random_normal([attention_size], stddev=0.1))
+            v = tf.tanh(tf.tensordot(inputs, w_omega, axes=1) + b_omega)
+            vu = tf.tensordot(v, u_omega, axes=1, name='vu')  # (B,T) shape
+            alphas = tf.nn.softmax(vu, name='alphas')  # (B,T) shape
+            # Output of (Bi-)RNN is reduced with attention vector; the result has (B,D) shape
+            output = tf.reduce_sum(inputs * tf.tile(tf.expand_dims(alphas, -1), [1, 1, hidden_size]), 1,
+                                   name="attention_embedding")
+            return output, alphas
 
     def unexp_attention(self, querys, keys, keys_id):
         """
@@ -169,23 +202,25 @@ class Model(object):
         keys:        [Batchsize, max_seq_len, embedding_size]  max_seq_len is the number of keys(e.g. number of clicked creativeid for each sample)
         keys_id:     [Batchsize, max_seq_len]
         """
-        querys = tf.expand_dims(querys, 1)
-        keys_length = tf.shape(keys)[1]  # padded_dim
-        embedding_size = querys.get_shape().as_list()[-1]
-        keys = tf.reshape(keys, shape=[-1, keys_length, embedding_size])
-        querys = tf.reshape(tf.tile(querys, [1, keys_length, 1]), shape=[-1, keys_length, embedding_size])
+        with tf.device(self.device):
 
-        net = tf.concat([keys, keys - querys, querys, keys * querys], axis=-1)
-        for units in [32, 16]:
-            net = tf.layers.dense(net, units=units, activation=tf.nn.relu)
-        att_wgt = tf.layers.dense(net, units=1, activation=tf.sigmoid)  # shape(batch_size, max_seq_len, 1)
-        outputs = tf.reshape(att_wgt, shape=[-1, 1, keys_length], name="weight")  # shape(batch_size, 1, max_seq_len)
-        scores = outputs
-        scores = scores / (embedding_size ** 0.5)  # scale
-        scores = tf.nn.softmax(scores)
-        outputs = tf.matmul(scores, keys)  # (batch_size, 1, embedding_size)
-        outputs = tf.reduce_sum(outputs, 1, name="unexp_embedding")  # (batch_size, embedding_size)
-        return outputs
+            querys = tf.expand_dims(querys, 1)
+            keys_length = tf.shape(keys)[1]  # padded_dim
+            embedding_size = querys.get_shape().as_list()[-1]
+            keys = tf.reshape(keys, shape=[-1, keys_length, embedding_size])
+            querys = tf.reshape(tf.tile(querys, [1, keys_length, 1]), shape=[-1, keys_length, embedding_size])
+
+            net = tf.concat([keys, keys - querys, querys, keys * querys], axis=-1)
+            for units in [32, 16]:
+                net = tf.layers.dense(net, units=units, activation=tf.nn.relu)
+            att_wgt = tf.layers.dense(net, units=1, activation=tf.sigmoid)  # shape(batch_size, max_seq_len, 1)
+            outputs = tf.reshape(att_wgt, shape=[-1, 1, keys_length], name="weight")  # shape(batch_size, 1, max_seq_len)
+            scores = outputs
+            scores = scores / (embedding_size ** 0.5)  # scale
+            scores = tf.nn.softmax(scores)
+            outputs = tf.matmul(scores, keys)  # (batch_size, 1, embedding_size)
+            outputs = tf.reduce_sum(outputs, 1, name="unexp_embedding")  # (batch_size, embedding_size)
+            return outputs
 
     def mean_shift(self, input_X, window_radius=0.2):
         X1 = tf.expand_dims(tf.transpose(input_X, perm=[0, 2, 1]), 1)
