@@ -8,7 +8,6 @@
 #SBATCH --gres=gpu:1
 #SBATCH --job-name=beer_baseline
 #SBATCH --mail-type=END
-#SBATCH --mail-user=nan.wu@nyu.edu
 
 module purge
 module load python3/intel/3.6.3
@@ -19,7 +18,7 @@ cd /home/nw1045/courses/contexual_purs
 source env.sh
 
 python3 code/train_purs.py \
---device /device:gpu:0 \
+--device /gpu:0 \
 --batch-size 32 \
 --dataset beer \
 --learning-rate $lr$ \

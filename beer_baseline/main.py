@@ -6,7 +6,7 @@ def main():
     lrs = 10**np.random.uniform(-1, 1, size = 10)
 
     for i, lr in enumerate(lrs):      
-        save_path = f'logs/beer_baseline/{i}_lr_{lr}'
+        save_path = f'/scratch/nw1045/contexual_purs/beer_baseline/{i}_lr_{lr}'
         with open(join("config.sh"), "r") as f:
             TEMPLATE = f.read()
             exp_config_path = join(EXPERIMENT_DIR, f'beer_baseline_{i}.sh')
