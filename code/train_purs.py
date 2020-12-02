@@ -5,6 +5,8 @@ import numpy as np
 import tensorflow as tf
 from model import Model
 from sklearn.metrics import roc_auc_score
+import tqdm
+import sys
 
 class DataInput:
     """
@@ -17,6 +19,7 @@ class DataInput:
         if self.epoch_size * self.batch_size < len(self.data):
             self.epoch_size += 1
         self.i = 0
+        self.metafeature_dict={}
 
     def __iter__(self):
         return self
@@ -30,13 +33,15 @@ class DataInput:
             raise StopIteration
         ts = self.data[self.i * self.batch_size: min((self.i + 1) * self.batch_size, len(self.data))]
         self.i += 1
-        u, hist, i, y = [], [], [], []
+        u, hist, i, y, meta = [], [], [], [], []
         for t in ts:
             u.append(t[0])
             hist.append(t[1])
             i.append(t[2])
             y.append(t[3])
-        return self.i, (u, hist, i, y)
+            if t[2] in self.metafeature_dict:
+                meta.append(self.metafeature_dict[t[2]])
+        return self.i, (u, hist, i, y, meta)
 
 class Stats:
     def __init__(self, cols):
@@ -193,7 +198,7 @@ def load_purs_data(batch_size, seed):
 
 def load_jester_data(batch_size, postfix):
     # rename the dimensions
-    tr_df, val_df, ts_df = load_dataset('../data/jester/clean/', postfix)
+    tr_df, val_df, ts_df = load_dataset('data/jester/clean/', postfix)
     tr_df = tr_df.rename(columns={"user":"user_id", "item":"video_id", "binary_y":"click"})
     val_df = val_df.rename(columns={"user":"user_id", "item":"video_id", "binary_y":"click"})
     ts_df = ts_df.rename(columns={"user":"user_id", "item":"video_id", "binary_y":"click"})
@@ -213,12 +218,65 @@ def load_jester_data(batch_size, postfix):
     tr, val, ts  = post_process_data(batch_size, [tr_df, val_df, ts_df])
     return tr, val, ts, user_count, item_count
 
+def get_name_embeddings(data_ori, col, embeddingsize):
+    name_vocabulary = [] 
+    for name in data_ori[col].values:
+        name_vocabulary.extend(" ".join(name.split()).lower().split(' ')) 
 
-def load_beer_data(batch_size, postfix):
+    name_vocabulary = list(set(name_vocabulary))
+    vocab = dict(zip(name_vocabulary,  np.random.randn(len(name_vocabulary), embeddingsize)))
+
+    name_embeddings = np.zeros((len(data_ori), embeddingsize))
+    for i, name in enumerate(data_ori[col].values):
+        words = " ".join(name.split()).lower().split(' ')
+
+        for word in words:
+            name_embeddings[i]+=vocab[word]
+    return name_embeddings, vocab
+
+def load_beer_metadata(data_ori, unique_items, embeddingsize=100):
+    #data_ori = pd.read_csv('../data/beer/clean_beer_reviews.csv', index_col = 0)
+
+    data_ori = data_ori.drop(['review_time', 'review_overall', 
+                              'review_aroma', 'review_appearance', 
+                              'review_profilename', 'review_palate', 'review_taste', 'reviewer_id', 
+                              #'num_tasted_beers'
+                              ], axis=1)
+
+    data_ori = data_ori.drop_duplicates()
+    data_ori = data_ori.set_index('beer_beerid')
+
+    for i in unique_items:
+        if i not in data_ori.index:
+            print(i)
+    data_ori = data_ori.loc[unique_items]
+    data_ori.beer_abv = data_ori.beer_abv.fillna(0)
+    data_ori.brewery_name = data_ori.brewery_name.fillna('unknown')
+
+    name_embeddings, name_vocab = get_name_embeddings(data_ori, 'beer_name', embeddingsize)
+    brewery_name_embeddings, brewery_name_vocab = get_name_embeddings(data_ori, 'brewery_name', embeddingsize)
+    print('Unique words in beer name: ', len(name_vocab))
+    print('Unique words in brewery name: ', len(brewery_name_vocab))
+
+    features = np.concatenate([name_embeddings, 
+                                    brewery_name_embeddings, 
+                                    np.expand_dims(data_ori.style_id.values, axis=1), 
+                                    np.expand_dims(data_ori.beer_abv.values, axis=1), 
+                                   ], 1)
+
+    feature_dict = dict(zip(data_ori.index, features))
+
+    return feature_dict
+
+
+def load_beer_data(batch_size, postfix, with_meta_data=False, embeddingsize=100):
     # load and preprocess data
-    data = pd.read_csv('../data/beer/small_clean_beer_reviews.csv')
+    # data = pd.read_csv('../data/beer/small_clean_beer_reviews.csv')
 
-    tr_df, val_df, ts_df = load_dataset('../data/beer', postfix)
+    tr_df, val_df, ts_df = load_dataset('data/beer', postfix)
+    all_df_withmeta = pd.concat([tr_df, val_df, ts_df])
+    #print(all_df_withmeta.columns)
+
     tr_df = tr_df.rename(columns={"reviewer_id":"user_id", "beer_beerid":"video_id","review_time":"hour", "binary_y":"click"})
     val_df = val_df.rename(columns={"reviewer_id":"user_id", "beer_beerid":"video_id","review_time":"hour", "binary_y":"click"})
     ts_df = ts_df.rename(columns={"reviewer_id":"user_id", "beer_beerid":"video_id","review_time":"hour", "binary_y":"click"})
@@ -231,10 +289,16 @@ def load_beer_data(batch_size, postfix):
 
     # post processing and split the dataset
     tr, val, ts = post_process_data(batch_size, [tr_df, val_df, ts_df])
-    return tr, val, ts, user_count, item_count
+
+    metafeature_dict = {}
+    if with_meta_data:
+        # print(list(all_df["video_id"].unique()))
+        metafeature_dict = load_beer_metadata(all_df_withmeta, list(all_df["video_id"].unique()), embeddingsize)
+
+    return tr, val, ts, user_count, item_count, metafeature_dict
 
 
-def eval_model(sess, model, dataset):
+def eval_model(sess, model, dataset, metafeature_dict, phase):
     """
     Function that run inference for a model on a dataset
     :param sess:
@@ -247,13 +311,28 @@ def eval_model(sess, model, dataset):
     all_users = []
     all_items = []
     all_exp = []
-    for _, uij in DataInput(dataset, batch_size):
+
+
+    epoch_size = round(len(dataset) / batch_size)
+    dataloder = DataInput(dataset, batch_size) 
+    if len(metafeature_dict) > 0:
+        dataloder.metafeature_dict = metafeature_dict
+
+    start_time = time.time()
+
+    for batch, uij in dataloder:
         score, label, user, item, unexp = model.test(sess, uij)
         all_scores.append(score)
         all_labels.append(label)
         all_users.append(user)
         all_items.append(item)
         all_exp.append(unexp)
+
+        timenow = time.time() - start_time
+        sys.stdout.write("\r\t Eval: %s %.2fs/step Step %d/%d" %
+                             (phase, timenow/batch, batch, epoch_size))
+        sys.stdout.flush()
+
     all_scores = [y for x in all_scores for y in x]
     all_labels = [y>0 for x in all_labels for y in x]
     all_users = [y for x in all_users for y in x]
@@ -294,7 +373,12 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="/cpu:0")
     parser.add_argument("--dataset", type=str, default="jester_small")
     parser.add_argument("--learning-rate", type=float, default=1.0)
-    parser.add_argument("--stats-path", type=str, default=None)
+    parser.add_argument("--save-path", type=str, default=None)
+    #parser.add_argument("--model-path", type=str, default=None)
+    parser.add_argument("--with-meta-data", action='store_true')
+    parser.add_argument("--embeddingsize", type=int, default=50)
+    parser.add_argument("--reload", action='store_true')
+
     args = parser.parse_args()
 
     # experiment set up
@@ -303,31 +387,49 @@ if __name__ == "__main__":
     tf.set_random_seed(args.seed)
     batch_size = args.batch_size
 
+    metafeature_dict = {}
+
     # load dataset
     if args.dataset == "jester":
         train_set, val_set, test_set, user_count, item_count = load_jester_data(batch_size, "")
     elif args.dataset == "jester_small":
         train_set, val_set, test_set, user_count, item_count = load_jester_data(batch_size, "_small")
     elif args.dataset == "beer":
-        train_set, val_set, test_set, user_count, item_count = load_beer_data(batch_size, "")
+        train_set, val_set, test_set, user_count, item_count, metafeature_dict = load_beer_data(batch_size, "", 
+            args.with_meta_data, args.embeddingsize)
     elif args.dataset == "beer_small":
-        train_set, val_set, test_set, user_count, item_count = load_beer_data(batch_size, "_small")
+        train_set, val_set, test_set, user_count, item_count, metafeature_dict = load_beer_data(batch_size, "_small", 
+            args.with_meta_data, args.embeddingsize)
     elif args.dataset == "beer_ultrasmall":
-        train_set, val_set, test_set, user_count, item_count = load_beer_data(batch_size, "_ultrasmall")
+        train_set, val_set, test_set, user_count, item_count, metafeature_dict = load_beer_data(batch_size, "_ultrasmall", 
+            args.with_meta_data, args.embeddingsize)
     else:
         raise ValueError("Invalid dataset option {}".format(args.dataset))
     print("data loaded.")
 
+    if not os.path.exists(args.save_path):
+        os.mkdir(args.save_path)
+
     # start experiment
     stats_holder = Stats(["auc", "hit", "cov", "unexp", "epoch", "phase"])
     gpu_options = tf.GPUOptions(allow_growth=True)
-    with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
+    config=tf.ConfigProto(allow_soft_placement=True,  log_device_placement=True, gpu_options=gpu_options )
+
+    with tf.Session(config=config) as sess:
         # model set up
-        model = Model(user_count, item_count, batch_size)
+        model = Model(user_count, item_count, batch_size, 
+            metafeaturesize= len(list(metafeature_dict.items())[0][1]) if args.with_meta_data > 0 else 0,
+            datatype=args.dataset,
+            device=args.device)
+        if args.reload and (args.save_path is not None):
+            model.restore(sess, path=os.path.join(args.save_path, '.model'))
+            print("model loaded.")
+
         sess.run(tf.global_variables_initializer())
         sess.run(tf.local_variables_initializer())
         lr = args.learning_rate
         last_auc = 0.0
+        highest_auc = 0.0
 
         # epoch loop
         for epoch_num in range(1, 1000):
@@ -336,35 +438,48 @@ if __name__ == "__main__":
             random.shuffle(train_set)
             epoch_size = round(len(train_set) / batch_size)
             loss_sum = 0.0
-            for _, uij in DataInput(train_set, batch_size):
+            dataloder = DataInput(train_set, batch_size) 
+            if len(metafeature_dict) > 0:
+                dataloder.metafeature_dict = metafeature_dict
+
+            for batch, uij in dataloder:
                 loss = model.train(sess, uij, lr)
                 loss_sum += loss
+                timenow = time.time() - start_time
+                sys.stdout.write("\rEpoch %d/%d %.2fs/step Step %d/%d: %s= %f" %
+                             (epoch_num, 1000, timenow/batch, batch, epoch_size, 'loss', loss_sum/batch))
+                sys.stdout.flush()
 
             # evaluation
             model.global_epoch_step_op.eval()
-            tr_preds, tr_labels, tr_usrs, tr_items, tr_exps = eval_model(sess, model, train_set)
-            val_preds, val_labels, val_usrs, val_items, val_exps = eval_model(sess, model, val_set)
-            ts_preds, ts_labels, ts_usrs, ts_items, ts_exps = eval_model(sess, model, test_set)
+            tr_preds, tr_labels, tr_usrs, tr_items, tr_exps = eval_model(sess, model, train_set, metafeature_dict, 'training')
+            val_preds, val_labels, val_usrs, val_items, val_exps = eval_model(sess, model, val_set, metafeature_dict, 'validation')
+            ts_preds, ts_labels, ts_usrs, ts_items, ts_exps = eval_model(sess, model, test_set, metafeature_dict, 'test')
             # calculate stats
             tr_stats = report_model(tr_preds, tr_labels, tr_usrs, tr_items, tr_exps, item_count)
             val_stats = report_model(val_preds, val_labels, val_usrs, val_items, val_exps, item_count)
             ts_stats = report_model(ts_preds, ts_labels, ts_usrs, ts_items, ts_exps, item_count)
             # report stats
-            print('Epoch %d DONE\tCost time: %.2f' %
+            print('\nEpoch %d DONE\tCost time: %.2f' %
                   (model.global_epoch_step.eval(), time.time() - start_time))
             print('Epoch %d loss: %.4f' % (model.global_epoch_step.eval(), loss_sum))
-            print('Epoch %d training stats: {}'.format(tr_stats))
-            print('Epoch %d validation stats: {}'.format(val_stats))
-            print('Epoch %d test stats: {}'.format(ts_stats))
+            print('Epoch %d'%model.global_epoch_step.eval(), 'training stats: {}'.format(tr_stats))
+            print('Epoch %d'%model.global_epoch_step.eval(), 'validation stats: {}'.format(val_stats))
+            print('Epoch %d'%model.global_epoch_step.eval(), 'test stats: {}'.format(ts_stats))
             # update stats
             stats_holder.update_stats(tr_stats, epoch_num, "training")
             stats_holder.update_stats(val_stats, epoch_num, "validation")
             stats_holder.update_stats(ts_stats, epoch_num, "test")
-            if args.stats_path is not None:
-                stats_holder.to_csv(args.stats_path)
+            
+            stats_holder.to_csv(os.path.join(args.save_path, 'history.csv'))
 
             # adjust learning rate
             train_auc = tr_stats["auc"]
             if abs(train_auc - last_auc) < 0.001:
                 lr /= 2
             last_auc = train_auc
+
+            if val_stats['auc']> highest_auc:
+                model.save(sess=sess, path=os.path.join(args.save_path, 'best_val.model'))
+                highest_auc = val_stats['auc']
+
