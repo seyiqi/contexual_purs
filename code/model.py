@@ -112,7 +112,7 @@ class Model(object):
             self.train_op = self.opt.apply_gradients(zip(clip_gradients, trainable_params), global_step=self.global_step)
 
     def train(self, sess, uij, lr):
-        if self.>0:
+        if self.metafeaturesize>0:
 
             loss, _ = sess.run([self.loss, self.train_op], feed_dict={
                 self.u: uij[0],
