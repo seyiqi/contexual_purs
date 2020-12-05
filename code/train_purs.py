@@ -220,8 +220,8 @@ def load_jester_data(batch_size, with_meta_data, postfix):
 
     metafeature_dict = {}
     if with_meta_data:
-        #meta_ori = pd.read_csv('../data/jester/clean/jokes_meta_2.csv', index_col = 0)
-        meta_ori = pd.read_csv('data/jester/clean/jokes_meta.csv', index_col = 0)
+        meta_ori = pd.read_csv('data/jester/clean/Jokes_meta_2.csv', index_col = 0)
+        #meta_ori = pd.read_csv('data/jester/clean/jokes_meta.csv', index_col = 0)
         meta_ori['w_embedding']=meta_ori['embedding'].apply(lambda x: [float(i) for i in x[1:][:-1].replace('\n', '').split(' ') if i])
         metafeature_dict = meta_ori['w_embedding'].to_dict()
 

@@ -21,6 +21,7 @@ class Model(object):
 
             user_emb_w = tf.get_variable("user_emb_w", [user_count, hidden_size // 2])
             item_emb_w = tf.get_variable("item_emb_w", [item_count, hidden_size // 2])
+            
             user_b = tf.get_variable("user_b", [user_count], initializer=tf.constant_initializer(0.0), )
             item_b = tf.get_variable("item_b", [item_count], initializer=tf.constant_initializer(0.0))
 
@@ -28,6 +29,9 @@ class Model(object):
                 tf.nn.embedding_lookup(item_emb_w, self.i),
                 tf.nn.embedding_lookup(user_emb_w, self.u),
             ], axis=1)
+
+            self.item_embeding = item_emb
+
             item_b = tf.gather(item_b, self.i)
             user_b = tf.gather(user_b, self.u)
             h_emb = tf.concat([
@@ -55,7 +59,7 @@ class Model(object):
 
             # Combine Long-Short-Term-User-Preferences
             if metafeaturesize>0:
-                if 'beer' or 'jester' in datatype:
+                if 'beer' in datatype:
                     meta_emb = tf.layers.dense(self.meta, 60, activation=tf.nn.sigmoid, name='metaf1')
                     meta_emb = tf.nn.dropout(meta_emb, 0.5)
                     meta_emb = tf.layers.dense(meta_emb, 30, activation=tf.nn.sigmoid, name='metaf2')
@@ -66,6 +70,9 @@ class Model(object):
             concat = tf.layers.batch_normalization(inputs=concat)
             concat = tf.layers.dense(concat, 80, activation=tf.nn.sigmoid, name='f1')
             concat = tf.layers.dense(concat, 40, activation=tf.nn.sigmoid, name='f2')
+
+            self.representation_to_save = concat#.copy()
+
             concat = tf.layers.dense(concat, 1, activation=None, name='f3')
             concat = tf.reshape(concat, [-1])
 
@@ -151,6 +158,25 @@ class Model(object):
 
         return score, uij[3], uij[0], uij[2], unexp
 
+    def eval_saving_representations(self, sess, uij):
+        if self.metafeaturesize>0:
+            score, unexp, representations = sess.run([self.score, self.unexp, self.representation_to_save], feed_dict={
+                self.u: uij[0],
+                self.hist: uij[1],
+                self.i: uij[2],
+                self.y: uij[3],
+                self.meta: uij[4],
+            })
+        else:
+            score, unexp, representations = sess.run([self.score, self.unexp, self.representation_to_save], feed_dict={
+                self.u: uij[0],
+                self.hist: uij[1],
+                self.i: uij[2],
+                self.y: uij[3],
+            })
+
+        return score, uij[3], uij[0], uij[2], unexp, representations
+
     def save(self, sess, path):
         saver = tf.train.Saver()
         saver.save(sess, save_path=path)
@@ -171,6 +197,7 @@ class Model(object):
         The idea was proposed in the article by Z. Yang et al., "Hierarchical Attention Networks
         for Document Classification", 2016: http://www.aclweb.org/anthology/N16-1174.
         Variables notation is also inherited from the article
+
         Args:
             inputs: The Attention inputs.
                 Matches outputs of RNN/Bi-RNN layer (not final state):
