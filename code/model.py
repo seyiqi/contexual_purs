@@ -161,7 +161,7 @@ class Model(object):
 
     def eval_saving_representations(self, sess, uij):
         if self.metafeaturesize>0:
-            score, unexp, representations = sess.run([self.score, self.unexp, self.representation_to_save], feed_dict={
+            score, unexp, representations, items_embed = sess.run([self.score, self.unexp, self.representation_to_save, self.item_embeding], feed_dict={
                 self.u: uij[0],
                 self.hist: uij[1],
                 self.i: uij[2],
@@ -169,14 +169,14 @@ class Model(object):
                 self.meta: uij[4],
             })
         else:
-            score, unexp, representations = sess.run([self.score, self.unexp, self.representation_to_save], feed_dict={
+            score, unexp, representations, items_embed = sess.run([self.score, self.unexp, self.representation_to_save, self.item_embeding], feed_dict={
                 self.u: uij[0],
                 self.hist: uij[1],
                 self.i: uij[2],
                 self.y: uij[3],
             })
 
-        return score, uij[3], uij[0], uij[2], unexp, representations
+        return score, uij[3], uij[0], uij[2], unexp, representations, items_embed
 
     def save(self, sess, path):
         saver = tf.train.Saver()

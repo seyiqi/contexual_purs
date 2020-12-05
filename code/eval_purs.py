@@ -35,7 +35,7 @@ def produce_representations(sess, model, dataset, metafeature_dict, phase):
     start_time = time.time()
 
     for batch, uij in dataloder:
-        score, label, user, item, unexp, representations = model.eval_saving_representations(sess, uij)
+        score, label, user, item, unexp, representations, items_embed = model.eval_saving_representations(sess, uij)
 
         all_scores.append(score)
         all_labels.append(label)
@@ -43,6 +43,7 @@ def produce_representations(sess, model, dataset, metafeature_dict, phase):
         all_items.append(item)
         all_exp.append(unexp)
         all_representations.append(representations)
+        all_items_embed.append(items_embed)
 
         timenow = time.time() - start_time
         sys.stdout.write("\r\t Eval: %s %.2fs/step Step %d/%d" %
@@ -55,7 +56,8 @@ def produce_representations(sess, model, dataset, metafeature_dict, phase):
     all_items = [y for x in all_items for y in x]
     all_exp = [y for x in all_exp for y in x]
     all_representations = [y for x in all_representations for y in x]
-    return all_scores, all_labels, all_users, all_items, all_exp, all_representations
+    all_items_embed = [y for x in all_items_embed for y in x]
+    return all_scores, all_labels, all_users, all_items, all_exp, all_representations, all_items_embed
 
 if __name__ == "__main__":
 
@@ -112,8 +114,6 @@ if __name__ == "__main__":
             datatype=args.dataset,
             device=args.device)
 
-        item_embedding = model.item_embeding
-
         print(os.path.join(args.model_path, 'best_val.model'))
         model.restore(sess, path=os.path.join(args.model_path, 'best_val.model'))
         print("model loaded.")
@@ -129,7 +129,7 @@ if __name__ == "__main__":
         model.global_epoch_step_op.eval()
         #eval_saving_representations
         
-        ts_preds, ts_labels, ts_usrs, ts_items, ts_exps, ts_representations = produce_representations(sess, 
+        ts_preds, ts_labels, ts_usrs, ts_items, ts_exps, ts_representations, item_embedding = produce_representations(sess, 
             model, test_set, metafeature_dict, 'test')
         # calculate stats
         ts_stats = report_model(ts_preds, ts_labels, ts_usrs, ts_items, ts_exps, item_count)
