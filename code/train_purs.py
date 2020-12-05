@@ -278,6 +278,55 @@ def load_beer_metadata(data_ori, unique_items, embeddingsize=100):
 
     return feature_dict
 
+def get_name_embeddings(data_ori, col, embeddingsize):
+    name_vocabulary = [] 
+    for name in data_ori[col].values:
+        name_vocabulary.extend(" ".join(name.split()).lower().split(' ')) 
+        
+    name_vocabulary = list(set(name_vocabulary))
+    vocab = dict(zip(name_vocabulary,  np.random.randn(len(name_vocabulary), embeddingsize)))
+
+    name_embeddings = np.zeros((len(data_ori), embeddingsize))
+    for i, name in enumerate(data_ori[col].values):
+        words = " ".join(name.split()).lower().split(' ')
+
+        for word in words:
+            name_embeddings[i]+=vocab[word]
+    return name_embeddings, vocab
+
+def load_beer_metadata(data_ori, unique_items, embeddingsize=100):
+    #data_ori = pd.read_csv('../data/beer/clean_beer_reviews.csv', index_col = 0)
+
+    data_ori = data_ori.drop(['review_time', 'review_overall', 
+                              'review_aroma', 'review_appearance', 
+                              'review_profilename', 'review_palate', 'review_taste', 'reviewer_id', 
+                              #'num_tasted_beers'
+                              ], axis=1)
+
+    data_ori = data_ori.drop_duplicates()
+    data_ori = data_ori.set_index('beer_beerid')
+
+    for i in unique_items:
+        if i not in data_ori.index:
+            print(i)
+    data_ori = data_ori.loc[unique_items]
+    data_ori.beer_abv = data_ori.beer_abv.fillna(0)
+    data_ori.brewery_name = data_ori.brewery_name.fillna('unknown')
+
+    name_embeddings, name_vocab = get_name_embeddings(data_ori, 'beer_name', embeddingsize)
+    brewery_name_embeddings, brewery_name_vocab = get_name_embeddings(data_ori, 'brewery_name', embeddingsize)
+    print('Unique words in beer name: ', len(name_vocab))
+    print('Unique words in brewery name: ', len(brewery_name_vocab))
+
+    features = np.concatenate([name_embeddings, 
+                                    brewery_name_embeddings, 
+                                    np.expand_dims(data_ori.style_id.values, axis=1), 
+                                    np.expand_dims(data_ori.beer_abv.values, axis=1), 
+                                   ], 1)
+
+    feature_dict = dict(zip(data_ori.index, features))
+
+    return feature_dict
 
 def load_beer_data(batch_size, postfix, with_meta_data=False, embeddingsize=100):
     # load and preprocess data
@@ -492,3 +541,4 @@ if __name__ == "__main__":
             if val_stats['auc']> highest_auc:
                 model.save(sess=sess, path=os.path.join(args.save_path, 'best_val.model'))
                 highest_auc = val_stats['auc']
+

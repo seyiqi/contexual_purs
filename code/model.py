@@ -60,6 +60,7 @@ class Model(object):
             # Combine Long-Short-Term-User-Preferences
             if metafeaturesize>0:
                 if 'beer' in datatype or 'jester' in datatype:
+
                     meta_emb = tf.layers.dense(self.meta, 60, activation=tf.nn.sigmoid, name='metaf1')
                     meta_emb = tf.nn.dropout(meta_emb, 0.5)
                     meta_emb = tf.layers.dense(meta_emb, 30, activation=tf.nn.sigmoid, name='metaf2')
