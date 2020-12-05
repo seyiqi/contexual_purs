@@ -196,9 +196,10 @@ def load_purs_data(batch_size, seed):
     return train_set, test_set, user_count, item_count
 
 
-def load_jester_data(batch_size, postfix):
+def load_jester_data(batch_size, with_meta_data, postfix):
     # rename the dimensions
     tr_df, val_df, ts_df = load_dataset('data/jester/clean/', postfix)
+
     tr_df = tr_df.rename(columns={"user":"user_id", "item":"video_id", "binary_y":"click"})
     val_df = val_df.rename(columns={"user":"user_id", "item":"video_id", "binary_y":"click"})
     ts_df = ts_df.rename(columns={"user":"user_id", "item":"video_id", "binary_y":"click"})
@@ -216,7 +217,16 @@ def load_jester_data(batch_size, postfix):
 
     # post processing and split the dataset
     tr, val, ts  = post_process_data(batch_size, [tr_df, val_df, ts_df])
-    return tr, val, ts, user_count, item_count
+
+    metafeature_dict = {}
+    if with_meta_data:
+        meta_ori = pd.read_csv('data/jester/clean/Jokes_meta_2.csv', index_col = 0)
+        #meta_ori = pd.read_csv('data/jester/clean/jokes_meta.csv', index_col = 0)
+        meta_ori['w_embedding']=meta_ori['embedding'].apply(lambda x: [float(i) for i in x[1:][:-1].replace('\n', '').split(' ') if i])
+        metafeature_dict = meta_ori['w_embedding'].to_dict()
+
+    return tr, val, ts, user_count, item_count, metafeature_dict
+
 
 def get_name_embeddings(data_ori, col, embeddingsize):
     name_vocabulary = [] 
@@ -268,6 +278,55 @@ def load_beer_metadata(data_ori, unique_items, embeddingsize=100):
 
     return feature_dict
 
+def get_name_embeddings(data_ori, col, embeddingsize):
+    name_vocabulary = [] 
+    for name in data_ori[col].values:
+        name_vocabulary.extend(" ".join(name.split()).lower().split(' ')) 
+        
+    name_vocabulary = list(set(name_vocabulary))
+    vocab = dict(zip(name_vocabulary,  np.random.randn(len(name_vocabulary), embeddingsize)))
+
+    name_embeddings = np.zeros((len(data_ori), embeddingsize))
+    for i, name in enumerate(data_ori[col].values):
+        words = " ".join(name.split()).lower().split(' ')
+
+        for word in words:
+            name_embeddings[i]+=vocab[word]
+    return name_embeddings, vocab
+
+def load_beer_metadata(data_ori, unique_items, embeddingsize=100):
+    #data_ori = pd.read_csv('../data/beer/clean_beer_reviews.csv', index_col = 0)
+
+    data_ori = data_ori.drop(['review_time', 'review_overall', 
+                              'review_aroma', 'review_appearance', 
+                              'review_profilename', 'review_palate', 'review_taste', 'reviewer_id', 
+                              #'num_tasted_beers'
+                              ], axis=1)
+
+    data_ori = data_ori.drop_duplicates()
+    data_ori = data_ori.set_index('beer_beerid')
+
+    for i in unique_items:
+        if i not in data_ori.index:
+            print(i)
+    data_ori = data_ori.loc[unique_items]
+    data_ori.beer_abv = data_ori.beer_abv.fillna(0)
+    data_ori.brewery_name = data_ori.brewery_name.fillna('unknown')
+
+    name_embeddings, name_vocab = get_name_embeddings(data_ori, 'beer_name', embeddingsize)
+    brewery_name_embeddings, brewery_name_vocab = get_name_embeddings(data_ori, 'brewery_name', embeddingsize)
+    print('Unique words in beer name: ', len(name_vocab))
+    print('Unique words in brewery name: ', len(brewery_name_vocab))
+
+    features = np.concatenate([name_embeddings, 
+                                    brewery_name_embeddings, 
+                                    np.expand_dims(data_ori.style_id.values, axis=1), 
+                                    np.expand_dims(data_ori.beer_abv.values, axis=1), 
+                                   ], 1)
+
+    feature_dict = dict(zip(data_ori.index, features))
+
+    return feature_dict
 
 def load_beer_data(batch_size, postfix, with_meta_data=False, embeddingsize=100):
     # load and preprocess data
@@ -391,9 +450,9 @@ if __name__ == "__main__":
 
     # load dataset
     if args.dataset == "jester":
-        train_set, val_set, test_set, user_count, item_count = load_jester_data(batch_size, "")
+        train_set, val_set, test_set, user_count, item_count,metafeature_dict = load_jester_data(batch_size, args.with_meta_data, "")
     elif args.dataset == "jester_small":
-        train_set, val_set, test_set, user_count, item_count = load_jester_data(batch_size, "_small")
+        train_set, val_set, test_set, user_count, item_count, metafeature_dict = load_jester_data(batch_size, args.with_meta_data, "_small")
     elif args.dataset == "beer":
         train_set, val_set, test_set, user_count, item_count, metafeature_dict = load_beer_data(batch_size, "", 
             args.with_meta_data, args.embeddingsize)
