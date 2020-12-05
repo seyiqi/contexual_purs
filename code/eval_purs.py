@@ -112,6 +112,8 @@ if __name__ == "__main__":
             datatype=args.dataset,
             device=args.device)
 
+        item_embedding = model.item_embeding
+
         print(os.path.join(args.model_path, 'best_val.model'))
         model.restore(sess, path=os.path.join(args.model_path, 'best_val.model'))
         print("model loaded.")
@@ -138,8 +140,8 @@ if __name__ == "__main__":
         print('Epoch %d'%model.global_epoch_step.eval(), 'test stats: {}'.format(ts_stats))
         # update stats
 
-        records = dict(zip(['pred', 'label', 'user', 'item', 'exp', 'representation'], 
-            [ts_preds, ts_labels, ts_usrs, ts_items, ts_exps, ts_representations]))
+        records = dict(zip(['pred', 'label', 'user', 'item', 'exp', 'representation', 'item_embedding'], 
+            [ts_preds, ts_labels, ts_usrs, ts_items, ts_exps, ts_representations, item_embedding]))
         
         pickle.dump(records, 
             open(os.path.join(args.save_path, 'records.pkl'), "wb" ))

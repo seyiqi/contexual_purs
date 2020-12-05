@@ -21,6 +21,7 @@ class Model(object):
 
             user_emb_w = tf.get_variable("user_emb_w", [user_count, hidden_size // 2])
             item_emb_w = tf.get_variable("item_emb_w", [item_count, hidden_size // 2])
+            
             user_b = tf.get_variable("user_b", [user_count], initializer=tf.constant_initializer(0.0), )
             item_b = tf.get_variable("item_b", [item_count], initializer=tf.constant_initializer(0.0))
 
@@ -28,6 +29,9 @@ class Model(object):
                 tf.nn.embedding_lookup(item_emb_w, self.i),
                 tf.nn.embedding_lookup(user_emb_w, self.u),
             ], axis=1)
+
+            self.item_embeding = item_emb
+
             item_b = tf.gather(item_b, self.i)
             user_b = tf.gather(user_b, self.u)
             h_emb = tf.concat([
