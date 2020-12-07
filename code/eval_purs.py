@@ -25,6 +25,7 @@ def produce_representations(sess, model, dataset, metafeature_dict, phase):
     all_items = []
     all_exp = []
     all_representations = []
+    all_items_embed = []
 
 
     epoch_size = round(len(dataset) / batch_size)
